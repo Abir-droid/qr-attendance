@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #1e1e2e; color: #cdd6f4; padding: 40px; }
+        .card { background: #313244; display: inline-block; padding: 30px; border-radius: 16px; width: 340px; }
+        .status-icon { font-size: 50px; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="status-icon">✅</div>
+        <h2 style="color: #a6e3a1;">{{ message }}</h2>
+        <p>Email: <b>{{ email }}</b></p>
+        <p>Student ID: <b>{{ student_id }}</b></p>
+        <p>Batch: <b>{{ batch }}</b> | Section: <b>{{ section }}</b></p>
+    </div>
+</body>
+</html>

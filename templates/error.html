@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Attendance Status</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #1e1e2e; color: #cdd6f4; padding: 40px; }
+        .card { background: #313244; display: inline-block; padding: 30px; border-radius: 16px; width: 340px; }
+        .status-icon { font-size: 50px; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="status-icon">⚠️</div>
+        <h2 style="color: #f38ba8;">{{ message }}</h2>
+        {% if detail %}
+            <p>{{ detail }}</p>
+        {% endif %}
+    </div>
+</body>
+</html>
