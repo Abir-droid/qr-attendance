@@ -2,7 +2,7 @@ import os
 import json
 import hashlib
 from datetime import datetime
-from flask import Flask, redirect, url_for, session, render_template_string, jsonify
+from flask import Flask, redirect, url_for, session, render_template_string, request
 from authlib.integrations.flask_client import OAuth
 import gspread
 from google.oauth2.service_account import Credentials
@@ -15,6 +15,7 @@ VARSITY_DOMAIN = "diu.edu.bd"
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 SPREADSHEET_NAME = "Attendance Register"
+SECTIONS = ["45A", "45B", "45C-(L)"]
 
 # Setup OAuth
 oauth = OAuth(app)
@@ -29,30 +30,29 @@ google = oauth.register(
 # Setup Google Sheets API Connection
 scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
-# Check if service account JSON is passed via Environment Variable (for Render deployment)
 service_account_env = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-
 if service_account_env:
-    # Load credentials directly from environment variable on Render
     info = json.loads(service_account_env)
     creds = Credentials.from_service_account_info(info, scopes=scopes)
 else:
-    # Fallback to local file for local testing
     creds = Credentials.from_service_account_file("service_account.json", scopes=scopes)
 
 gc = gspread.authorize(creds)
 
-def get_today_key():
+def get_today_key(section):
     today_str = datetime.now().strftime("%Y-%m-%d")
-    return hashlib.md5(f"SALT_KEY_{today_str}".encode()).hexdigest()[:8]
+    return hashlib.md5(f"SALT_KEY_{today_str}_{section}".encode()).hexdigest()[:8]
 
 # --- ROUTES ---
 
 @app.route('/')
 def teacher_display():
-    # Classroom screen displays today's QR
-    today_key = get_today_key()
-    qr_target_url = url_for('student_login', key=today_key, _external=True)
+    selected_section = request.args.get('section', SECTIONS[0])
+    if selected_section not in SECTIONS:
+        selected_section = SECTIONS[0]
+
+    today_key = get_today_key(selected_section)
+    qr_target_url = url_for('student_login', section=selected_section, key=today_key, _external=True)
     
     html = """
     <!DOCTYPE html>
@@ -61,34 +61,55 @@ def teacher_display():
         <title>Daily Attendance QR</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
         <style>
-            body { font-family: sans-serif; text-align: center; background: #1e1e2e; color: #cdd6f4; padding: 40px; }
-            .card { background: #313244; display: inline-block; padding: 30px; border-radius: 16px; }
+            body { font-family: sans-serif; text-align: center; background: #1e1e2e; color: #cdd6f4; padding: 30px; }
+            .card { background: #313244; display: inline-block; padding: 30px; border-radius: 16px; min-width: 300px; }
             #qrcode { background: white; padding: 15px; border-radius: 8px; margin: 20px auto; display: flex; justify-content: center; }
+            select { padding: 10px 15px; font-size: 16px; border-radius: 8px; border: none; background: #45475a; color: white; cursor: pointer; margin-bottom: 20px; }
+            label { font-size: 18px; margin-right: 10px; }
         </style>
     </head>
     <body>
         <h1>Today's Attendance QR</h1>
-        <p>Scan with your phone camera and sign in with @diu.edu.bd</p>
-        <div class="card">
-            <div id="qrcode"></div>
-            <p><strong>Valid for today only</strong></p>
+        
+        <div>
+            <label for="section-select"><b>Select Section:</b></label>
+            <select id="section-select" onchange="location = this.value;">
+                {% for sec in sections %}
+                    <option value="/?section={{ sec }}" {% if sec == current_section %}selected{% endif %}>
+                        Section {{ sec }}
+                    </option>
+                {% endfor %}
+            </select>
         </div>
+
+        <div class="card">
+            <h2>Section: {{ current_section }}</h2>
+            <div id="qrcode"></div>
+            <p>Scan with your phone camera & sign in with <b>@diu.edu.bd</b></p>
+            <p><small>Valid for today only</small></p>
+        </div>
+
         <script>
             new QRCode(document.getElementById("qrcode"), { text: "{{ url }}", width: 260, height: 260 });
         </script>
     </body>
     </html>
     """
-    return render_template_string(html, url=qr_target_url)
+    return render_template_string(
+        html, 
+        url=qr_target_url, 
+        sections=SECTIONS, 
+        current_section=selected_section
+    )
 
-@app.route('/scan/<key>')
-def student_login(key):
-    if key != get_today_key():
-        return "<h3>This QR code has expired or is invalid for today.</h3>", 400
+@app.route('/scan/<section>/<key>')
+def student_login(section, key):
+    if section not in SECTIONS or key != get_today_key(section):
+        return "<h3>This QR code has expired or is invalid.</h3>", 400
     
     session['attendance_key'] = key
+    session['section'] = section
     redirect_uri = url_for('auth_callback', _external=True)
-    # hd=diu.edu.bd forces Google to prompt for @diu.edu.bd emails directly
     return google.authorize_redirect(redirect_uri, hd=VARSITY_DOMAIN, prompt='select_account')
 
 @app.route('/callback')
@@ -108,29 +129,30 @@ def auth_callback():
             <h2 style="color:red;">Access Denied</h2>
             <p>You logged in as: <b>{user_email}</b></p>
             <p>You must use an <b>@{VARSITY_DOMAIN}</b> account to mark attendance.</p>
-            <a href="/scan/{session.get('attendance_key', '')}">Try Again with Varsity Account</a>
         </div>
         """
         return html, 403
 
-    # Check key validity
+    section = session.get('section')
     current_key = session.get('attendance_key')
-    if current_key != get_today_key():
+    
+    if not section or current_key != get_today_key(section):
         return "Session expired. Please scan the QR code again.", 400
 
     # Record attendance in Google Sheet
     student_id = user_email.split('@')[0]
     today_str = datetime.now().strftime("%Y-%m-%d")
+    sheet_tab_name = f"{today_str}_{section}"
     now_time = datetime.now().strftime("%H:%M:%S")
 
     sh = gc.open(SPREADSHEET_NAME)
     
-    # Get or create today's worksheet tab
+    # Get or create worksheet tab for today's section
     try:
-        worksheet = sh.worksheet(today_str)
+        worksheet = sh.worksheet(sheet_tab_name)
     except gspread.exceptions.WorksheetNotFound:
-        worksheet = sh.add_worksheet(title=today_str, rows="100", cols="10")
-        worksheet.append_row(["Timestamp", "Student ID", "Varsity Email", "Status"])
+        worksheet = sh.add_worksheet(title=sheet_tab_name, rows="100", cols="10")
+        worksheet.append_row(["Timestamp", "Student ID", "Section", "Varsity Email", "Status"])
 
     # Prevent duplicates
     records = worksheet.get_all_records()
@@ -139,18 +161,19 @@ def auth_callback():
             return f"""
             <div style="font-family:sans-serif; text-align:center; padding:30px;">
                 <h2 style="color:#b45309;">Already Logged</h2>
-                <p>Attendance for <b>{student_id}</b> has already been submitted today!</p>
+                <p>Attendance for <b>{student_id}</b> in section <b>{section}</b> has already been submitted today!</p>
             </div>
             """
 
     # Append entry
-    worksheet.append_row([now_time, student_id, user_email, "Present"])
+    worksheet.append_row([now_time, student_id, section, user_email, "Present"])
 
     return f"""
     <div style="font-family:sans-serif; text-align:center; padding:30px;">
         <h2 style="color:green;">Attendance Marked!</h2>
         <p>Logged as: <b>{user_email}</b></p>
         <p>Student ID: <b>{student_id}</b></p>
+        <p>Section: <b>{section}</b></p>
     </div>
     """
 
