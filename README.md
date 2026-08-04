@@ -32,11 +32,13 @@ A secure, real-time classroom attendance tracking system built with Python (Flas
 
 <img width="2546" height="1242" alt="Screenshot 2026-08-04 224236" src="https://github.com/user-attachments/assets/41028b6a-6c43-4b77-b4bf-d232094f30ef" />
 
-<img width="2558" height="1249" alt="Screenshot 2026-08-04 224529" src="https://github.com/user-attachments/assets/596eed3d-6551-4fbe-afc5-927423d6d00e" />
+<img width="2558" height="1249" alt="Screenshot 2026-08-04 224529" src="https://github.com/user-attachments/assets/cdf7c0b9-4045-488f-82ce-655d948bc899" />
 
 <img width="1038" height="2306" alt="Screenshot_20260804-224436_Chrome" src="https://github.com/user-attachments/assets/2037e0d4-c67f-4206-b341-f24aba908633" />
 
 <img width="1080" height="2400" alt="Screenshot_20260804-224501_Chrome" src="https://github.com/user-attachments/assets/91ad98a1-297b-4af2-8617-13575b83e637" />
+
+
 
 <img width="1080" height="2400" alt="Screenshot_20260804-225107_Chrome" src="https://github.com/user-attachments/assets/5176ceef-1cd2-433f-a7b2-fd73124812a5" />
 
