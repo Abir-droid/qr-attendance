@@ -1,6 +1,7 @@
 import os
 import json
 import hashlib
+import time
 from datetime import datetime
 from flask import Flask, redirect, url_for, session, render_template_string, request
 from authlib.integrations.flask_client import OAuth
@@ -19,6 +20,13 @@ SPREADSHEET_NAME = "Attendance Register"
 # Generate choices
 BATCHES = [str(b) for b in range(40, 79)]  # 40 through 78
 SECTIONS = [chr(s) for s in range(ord('A'), ord('P') + 1)]  # A through P
+DURATIONS = [
+    {"label": "1 Minute", "value": 1},
+    {"label": "3 Minutes", "value": 3},
+    {"label": "5 Minutes", "value": 5},
+    {"label": "10 Minutes", "value": 10},
+    {"label": "Unlimited", "value": 0}
+]
 
 # Setup OAuth
 oauth = OAuth(app)
@@ -42,9 +50,9 @@ else:
 
 gc = gspread.authorize(creds)
 
-def get_today_key(batch, section):
+def get_today_key(batch, section, expires_at):
     today_str = datetime.now().strftime("%Y-%m-%d")
-    return hashlib.md5(f"SALT_KEY_{today_str}_{batch}_{section}".encode()).hexdigest()[:8]
+    return hashlib.md5(f"SALT_KEY_{today_str}_{batch}_{section}_{expires_at}".encode()).hexdigest()[:8]
 
 # --- ROUTES ---
 
@@ -52,15 +60,32 @@ def get_today_key(batch, section):
 def teacher_display():
     selected_batch = request.args.get('batch', '45')
     selected_section = request.args.get('section', 'A')
+    try:
+        duration_minutes = int(request.args.get('duration', 3))
+    except ValueError:
+        duration_minutes = 3
 
-    # Basic fallback checks
+    # Fallback checks
     if selected_batch not in BATCHES:
         selected_batch = '45'
     if selected_section not in SECTIONS:
         selected_section = 'A'
 
-    today_key = get_today_key(selected_batch, selected_section)
-    qr_target_url = url_for('student_login', batch=selected_batch, section=selected_section, key=today_key, _external=True)
+    now_ts = int(time.time())
+    if duration_minutes > 0:
+        expires_at = now_ts + (duration_minutes * 60)
+    else:
+        expires_at = 0  # 0 indicates no expiration
+
+    today_key = get_today_key(selected_batch, selected_section, expires_at)
+    qr_target_url = url_for(
+        'student_login', 
+        batch=selected_batch, 
+        section=selected_section, 
+        expires_at=expires_at, 
+        key=today_key, 
+        _external=True
+    )
     
     html = """
     <!DOCTYPE html>
@@ -72,9 +97,12 @@ def teacher_display():
             body { font-family: sans-serif; text-align: center; background: #1e1e2e; color: #cdd6f4; padding: 30px; }
             .card { background: #313244; display: inline-block; padding: 30px; border-radius: 16px; min-width: 320px; }
             #qrcode { background: white; padding: 15px; border-radius: 8px; margin: 20px auto; display: flex; justify-content: center; }
-            .controls { margin-bottom: 25px; display: flex; justify-content: center; gap: 15px; align-items: center; }
-            select { padding: 10px 15px; font-size: 16px; border-radius: 8px; border: none; background: #45475a; color: white; cursor: pointer; }
+            .controls { margin-bottom: 25px; display: flex; justify-content: center; gap: 15px; align-items: center; flex-wrap: wrap; }
+            select, button { padding: 10px 15px; font-size: 16px; border-radius: 8px; border: none; background: #45475a; color: white; cursor: pointer; }
+            button { background: #89b4fa; color: #11111b; font-weight: bold; }
             label { font-size: 16px; font-weight: bold; }
+            #timer { font-size: 24px; font-weight: bold; color: #f38ba8; margin-top: 10px; }
+            .expired-text { color: #f38ba8; font-size: 28px; font-weight: bold; padding: 40px; }
         </style>
     </head>
     <body>
@@ -83,36 +111,69 @@ def teacher_display():
         <form method="GET" action="/" class="controls">
             <div>
                 <label for="batch">Batch: </label>
-                <select id="batch" name="batch" onchange="this.form.submit()">
+                <select id="batch" name="batch">
                     {% for b in batches %}
-                        <option value="{{ b }}" {% if b == current_batch %}selected{% endif %}>
-                            Batch {{ b }}
-                        </option>
+                        <option value="{{ b }}" {% if b == current_batch %}selected{% endif %}>Batch {{ b }}</option>
                     {% endfor %}
                 </select>
             </div>
 
             <div>
                 <label for="section">Section: </label>
-                <select id="section" name="section" onchange="this.form.submit()">
+                <select id="section" name="section">
                     {% for s in sections %}
-                        <option value="{{ s }}" {% if s == current_section %}selected{% endif %}>
-                            Section {{ s }}
-                        </option>
+                        <option value="{{ s }}" {% if s == current_section %}selected{% endif %}>Section {{ s }}</option>
                     {% endfor %}
                 </select>
             </div>
+
+            <div>
+                <label for="duration">Timer: </label>
+                <select id="duration" name="duration">
+                    {% for d in durations %}
+                        <option value="{{ d.value }}" {% if d.value == current_duration %}selected{% endif %}>{{ d.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <button type="submit">Generate / Reset QR</button>
         </form>
 
         <div class="card">
             <h2>Batch {{ current_batch }} - Section {{ current_section }}</h2>
-            <div id="qrcode"></div>
+            <div id="qr-container">
+                <div id="qrcode"></div>
+            </div>
+            <div id="timer"></div>
             <p>Scan with phone camera & sign in with <b>@diu.edu.bd</b></p>
-            <p><small>Valid for today only</small></p>
         </div>
 
         <script>
-            new QRCode(document.getElementById("qrcode"), { text: "{{ url }}", width: 260, height: 260 });
+            var expiresAt = {{ expires_at }};
+            var qrUrl = "{{ url }}";
+
+            new QRCode(document.getElementById("qrcode"), { text: qrUrl, width: 260, height: 260 });
+
+            if (expiresAt > 0) {
+                function updateTimer() {
+                    var now = Math.floor(Date.now() / 1000);
+                    var remaining = expiresAt - now;
+
+                    if (remaining <= 0) {
+                        document.getElementById("qr-container").innerHTML = "<div class='expired-text'>🚨 QR Code Expired</div>";
+                        document.getElementById("timer").innerText = "Time's up! Generating new entries blocked.";
+                        clearInterval(interval);
+                    } else {
+                        var minutes = Math.floor(remaining / 60);
+                        var seconds = remaining % 60;
+                        document.getElementById("timer").innerText = "Time Remaining: " + minutes + "m " + (seconds < 10 ? "0" : "") + seconds + "s";
+                    }
+                }
+                updateTimer();
+                var interval = setInterval(updateTimer, 1000);
+            } else {
+                document.getElementById("timer").innerText = "Timer: Unlimited";
+            }
         </script>
     </body>
     </html>
@@ -122,18 +183,28 @@ def teacher_display():
         url=qr_target_url, 
         batches=BATCHES,
         sections=SECTIONS, 
+        durations=DURATIONS,
         current_batch=selected_batch,
-        current_section=selected_section
+        current_section=selected_section,
+        current_duration=duration_minutes,
+        expires_at=expires_at
     )
 
-@app.route('/scan/<batch>/<section>/<key>')
-def student_login(batch, section, key):
-    if batch not in BATCHES or section not in SECTIONS or key != get_today_key(batch, section):
-        return "<h3>This QR code has expired or is invalid.</h3>", 400
+@app.route('/scan/<batch>/<section>/<int:expires_at>/<key>')
+def student_login(batch, section, expires_at, key):
+    now_ts = int(time.time())
+    
+    # Check key and expiration timestamp on server side
+    if expires_at != 0 and now_ts > expires_at:
+        return "<h3 style='color:red; text-align:center;'>This QR code has expired. Attendance submission is closed.</h3>", 400
+
+    if batch not in BATCHES or section not in SECTIONS or key != get_today_key(batch, section, expires_at):
+        return "<h3 style='color:red; text-align:center;'>Invalid or corrupted QR link.</h3>", 400
     
     session['attendance_key'] = key
     session['batch'] = batch
     session['section'] = section
+    session['expires_at'] = expires_at
     redirect_uri = url_for('auth_callback', _external=True)
     return google.authorize_redirect(redirect_uri, hd=VARSITY_DOMAIN, prompt='select_account')
 
@@ -160,10 +231,16 @@ def auth_callback():
 
     batch = session.get('batch')
     section = session.get('section')
+    expires_at = session.get('expires_at', 0)
     current_key = session.get('attendance_key')
     
-    if not batch or not section or current_key != get_today_key(batch, section):
-        return "Session expired. Please scan the QR code again.", 400
+    # Expiration check at submission time
+    now_ts = int(time.time())
+    if expires_at != 0 and now_ts > expires_at:
+        return "<h3 style='color:red; text-align:center;'>Session expired while logging in. Attendance is closed.</h3>", 400
+
+    if not batch or not section or current_key != get_today_key(batch, section, expires_at):
+        return "Session expired. Please scan the active QR code again.", 400
 
     # Record attendance in Google Sheet
     student_id = user_email.split('@')[0]
