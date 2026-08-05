@@ -13,8 +13,24 @@
         select, button { padding: 10px 15px; font-size: 16px; border-radius: 8px; border: none; background: #45475a; color: white; cursor: pointer; }
         button.primary { background: #89b4fa; color: #11111b; font-weight: bold; }
         a.logout { color: #f38ba8; text-decoration: none; font-weight: bold; border: 1px solid #f38ba8; padding: 8px 14px; border-radius: 8px; }
-        #timer { font-size: 24px; font-weight: bold; color: #f38ba8; margin-top: 10px; }
+        #timer { font-size: 20px; font-weight: bold; color: #f38ba8; margin-top: 10px; }
         .expired-text { color: #f38ba8; font-size: 28px; font-weight: bold; padding: 40px; }
+        
+        /* Attendance Counter Badge */
+        .count-badge {
+            margin-top: 20px;
+            padding: 12px 20px;
+            background: #181825;
+            border-radius: 12px;
+            display: inline-block;
+            border: 1px solid #45475a;
+        }
+        .count-number {
+            font-size: 32px;
+            font-weight: bold;
+            color: #a6e3a1;
+        }
+        footer a { color: #89b4fa; text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -60,20 +76,30 @@
             <div id="qrcode"></div>
         </div>
         <div id="timer"></div>
+
+        <!-- Live Attendance Counter -->
+        <div class="count-badge">
+            <div style="font-size: 14px; color: #bac2de;">Total Present</div>
+            <div id="live-count" class="count-number">0</div>
+        </div>
+
         <p>Scan with phone camera & sign in with <b>@diu.edu.bd</b></p>
     </div>
 
     <footer style="margin-top: 40px; font-size: 14px; color: #a6adc8;">
         <p>© 2026 Attendance System. All rights reserved.</p>
-        <p>Crafted with ❤️ by <a href="https://github.com/Abir-droid" target="_blank" style="color: #89b4fa; text-decoration: underline;">Abir-droid</a></p>
+        <p>Crafted with ❤️ by <a href="https://github.com/Abir-droid" target="_blank">Abir-droid</a></p>
     </footer>
 
     <script>
         var expiresAt = Number("{{ expires_at }}");
         var qrUrl = "{{ url }}";
+        var batch = "{{ current_batch }}";
+        var section = "{{ current_section }}";
 
         new QRCode(document.getElementById("qrcode"), { text: qrUrl, width: 260, height: 260 });
 
+        // Countdown Timer Logic
         if (expiresAt > 0) {
             function updateTimer() {
                 var now = Math.floor(Date.now() / 1000);
@@ -82,7 +108,7 @@
                 if (remaining <= 0) {
                     document.getElementById("qr-container").innerHTML = "<div class='expired-text'>🚨 QR Code Expired</div>";
                     document.getElementById("timer").innerText = "Attendance reception is closed.";
-                    clearInterval(interval);
+                    clearInterval(timerInterval);
                 } else {
                     var minutes = Math.floor(remaining / 60);
                     var seconds = remaining % 60;
@@ -90,10 +116,23 @@
                 }
             }
             updateTimer();
-            var interval = setInterval(updateTimer, 1000);
+            var timerInterval = setInterval(updateTimer, 1000);
         } else {
             document.getElementById("timer").innerText = "Timer: Unlimited";
         }
+
+        // Live Attendance Polling
+        function fetchAttendanceCount() {
+            fetch('/api/attendance-count?batch=' + batch + '&section=' + section)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById("live-count").innerText = data.count;
+                })
+                .catch(err => console.error("Count sync error:", err));
+        }
+
+        fetchAttendanceCount();
+        setInterval(fetchAttendanceCount, 3000); // Poll every 3 seconds
     </script>
 </body>
 </html>

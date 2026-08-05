@@ -4,7 +4,7 @@ import hashlib
 import time
 from datetime import datetime
 from functools import wraps
-from flask import Flask, redirect, url_for, session, render_template, request
+from flask import Flask, jsonify, redirect, url_for, session, render_template, request
 from authlib.integrations.flask_client import OAuth
 import gspread
 from google.oauth2.service_account import Credentials
@@ -194,6 +194,27 @@ def auth_callback():
         batch=batch,
         section=section
     )
+@app.route('/api/attendance-count')
+def attendance_count():
+    batch = request.args.get('batch')
+    section = request.args.get('section')
 
+    if not batch or not section:
+        return jsonify({"count": 0})
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    sheet_tab_name = f"{today_str}_B{batch}_Sec{section}"
+
+    sh = gc.open(SPREADSHEET_NAME)
+
+    try:
+        worksheet = sh.worksheet(sheet_tab_name)
+        # Get row count minus header row
+        records = worksheet.get_all_values()
+        count = max(0, len(records) - 1)
+    except gspread.exceptions.WorksheetNotFound:
+        count = 0
+
+    return jsonify({"count": count})
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
