@@ -8,10 +8,30 @@ from flask import Flask, jsonify, redirect, url_for, session, render_template, r
 from authlib.integrations.flask_client import OAuth
 import gspread
 from google.oauth2.service_account import Credentials
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+# --- SUB-PATH PREFIX SUPPORT ---
+# Set SCRIPT_NAME env var to deploy under a sub-path (e.g. "/qrattendance")
+# Leave unset or empty for root deployment (e.g. Vercel)
+SCRIPT_NAME = os.environ.get("SCRIPT_NAME", "").rstrip("/")
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "super-secret-key-change-this")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")  # Set your password here or in Render
+
+# Trust reverse proxy headers (Coolify runs behind Traefik)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# Set preferred URL scheme for url_for(_external=True) behind HTTPS proxy
+app.config["PREFERRED_URL_SCHEME"] = "https"
+
+# Set APPLICATION_ROOT so Flask's url_for() generates correct prefixed URLs
+if SCRIPT_NAME:
+    app.config["APPLICATION_ROOT"] = SCRIPT_NAME
+
+# Session cookie config for sub-path
+app.config["SESSION_COOKIE_PATH"] = SCRIPT_NAME or "/"
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 # --- CONFIGURATION ---
 VARSITY_DOMAIN = "diu.edu.bd"
@@ -216,5 +236,29 @@ def attendance_count():
         count = 0
 
     return jsonify({"count": count})
+
+# --- SUB-PATH WSGI MIDDLEWARE ---
+# This middleware strips SCRIPT_NAME from incoming requests so Flask routes
+# match correctly, while keeping SCRIPT_NAME in the environ so url_for()
+# generates correct prefixed URLs.
+class PrefixMiddleware:
+    def __init__(self, wsgi_app, prefix):
+        self.app = wsgi_app
+        self.prefix = prefix
+
+    def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "")
+        if path.startswith(self.prefix):
+            environ["PATH_INFO"] = path[len(self.prefix):] or "/"
+            environ["SCRIPT_NAME"] = self.prefix
+        return self.app(environ, start_response)
+
+# Wrap the WSGI app with prefix middleware if SCRIPT_NAME is set
+if SCRIPT_NAME:
+    app.wsgi_app = PrefixMiddleware(app.wsgi_app, SCRIPT_NAME)
+
+# WSGI entry point for gunicorn (Coolify: `gunicorn app:application`)
+application = app
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

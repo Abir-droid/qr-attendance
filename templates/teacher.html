@@ -36,10 +36,10 @@
 <body>
     <div class="top-bar">
         <h2>Attendance Control Panel</h2>
-        <a href="/logout" class="logout">Logout</a>
+        <a href="{{ url_for('logout') }}" class="logout">Logout</a>
     </div>
 
-    <form method="GET" action="/" class="controls">
+    <form method="GET" action="{{ url_for('teacher_display') }}" class="controls">
         <div>
             <label for="batch"><b>Batch:</b> </label>
             <select id="batch" name="batch">
@@ -123,7 +123,7 @@
 
         // Live Attendance Polling
         function fetchAttendanceCount() {
-            fetch('/api/attendance-count?batch=' + batch + '&section=' + section)
+            fetch('{{ url_for("attendance_count") }}?batch=' + batch + '&section=' + section)
                 .then(response => response.json())
                 .then(data => {
                     document.getElementById("live-count").innerText = data.count;
