@@ -10,10 +10,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-# --- SUB-PATH PREFIX SUPPORT ---
-# Set SCRIPT_NAME env var to deploy under a sub-path (e.g. "/qrattendance")
-# Leave unset or empty for root deployment (e.g. Vercel)
-SCRIPT_NAME = os.environ.get("SCRIPT_NAME", "").rstrip("/")
+# --- SUB-PATH / REVERSE PROXY SUPPORT (Coolify, etc.) ---
+# Pop SCRIPT_NAME from os.environ so Gunicorn does NOT perform its own prefix check
+# (which crashes with "Configuration problem: Request path '/' does not start with SCRIPT_NAME"
+# when Traefik strips the subpath before forwarding).
+_script_name_env = os.environ.pop("SCRIPT_NAME", None)
+APPLICATION_ROOT = (_script_name_env or os.environ.get("APPLICATION_ROOT", "")).rstrip("/")
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "super-secret-key-change-this")
@@ -25,9 +27,8 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 # Set preferred URL scheme for url_for(_external=True) behind HTTPS proxy
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
-
 # Session cookie config for sub-path
-app.config["SESSION_COOKIE_PATH"] = SCRIPT_NAME or "/"
+app.config["SESSION_COOKIE_PATH"] = APPLICATION_ROOT or "/"
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 # --- CONFIGURATION ---
@@ -235,21 +236,31 @@ def attendance_count():
     return jsonify({"count": count})
 
 # --- SUB-PATH WSGI MIDDLEWARE ---
-# Traefik (Coolify's reverse proxy) already strips the sub-path prefix from
-# incoming requests. This middleware just injects SCRIPT_NAME into the WSGI
-# environ so url_for() generates correct prefixed URLs (e.g. /qrattendance/login).
 class PrefixMiddleware:
+    """Ensure SCRIPT_NAME is always set so that url_for() generates URLs
+    with the subpath prefix.  This handles two reverse-proxy scenarios:
+
+    1. The proxy forwards the full path including the prefix
+       →  strip it from PATH_INFO.
+    2. The proxy already strips the prefix before forwarding
+       →  PATH_INFO is already relative; just set SCRIPT_NAME.
+    """
     def __init__(self, wsgi_app, prefix):
-        self.app = wsgi_app
-        self.prefix = prefix
+        self.wsgi_app = wsgi_app
+        self.prefix = prefix.rstrip("/")
 
     def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "")
+        if path == self.prefix or path.startswith(self.prefix + "/"):
+            # Proxy kept the prefix — strip it
+            environ["PATH_INFO"] = path[len(self.prefix):] or "/"
+        # Always advertise the prefix so url_for() includes it
         environ["SCRIPT_NAME"] = self.prefix
-        return self.app(environ, start_response)
+        return self.wsgi_app(environ, start_response)
 
-# Wrap the WSGI app with prefix middleware if SCRIPT_NAME is set
-if SCRIPT_NAME:
-    app.wsgi_app = PrefixMiddleware(app.wsgi_app, SCRIPT_NAME)
+# Wrap the WSGI app with prefix middleware if APPLICATION_ROOT is set
+if APPLICATION_ROOT:
+    app.wsgi_app = PrefixMiddleware(app.wsgi_app, APPLICATION_ROOT)
 
 # WSGI entry point for gunicorn (Coolify: `gunicorn app:application`)
 application = app
