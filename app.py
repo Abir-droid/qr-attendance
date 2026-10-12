@@ -25,9 +25,6 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 # Set preferred URL scheme for url_for(_external=True) behind HTTPS proxy
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
-# Set APPLICATION_ROOT so Flask's url_for() generates correct prefixed URLs
-if SCRIPT_NAME:
-    app.config["APPLICATION_ROOT"] = SCRIPT_NAME
 
 # Session cookie config for sub-path
 app.config["SESSION_COOKIE_PATH"] = SCRIPT_NAME or "/"
@@ -238,19 +235,16 @@ def attendance_count():
     return jsonify({"count": count})
 
 # --- SUB-PATH WSGI MIDDLEWARE ---
-# This middleware strips SCRIPT_NAME from incoming requests so Flask routes
-# match correctly, while keeping SCRIPT_NAME in the environ so url_for()
-# generates correct prefixed URLs.
+# Traefik (Coolify's reverse proxy) already strips the sub-path prefix from
+# incoming requests. This middleware just injects SCRIPT_NAME into the WSGI
+# environ so url_for() generates correct prefixed URLs (e.g. /qrattendance/login).
 class PrefixMiddleware:
     def __init__(self, wsgi_app, prefix):
         self.app = wsgi_app
         self.prefix = prefix
 
     def __call__(self, environ, start_response):
-        path = environ.get("PATH_INFO", "")
-        if path.startswith(self.prefix):
-            environ["PATH_INFO"] = path[len(self.prefix):] or "/"
-            environ["SCRIPT_NAME"] = self.prefix
+        environ["SCRIPT_NAME"] = self.prefix
         return self.app(environ, start_response)
 
 # Wrap the WSGI app with prefix middleware if SCRIPT_NAME is set
